@@ -1,0 +1,129 @@
+＜＜Lola作成＞＞
+
+✅ 【STEP 0】準備するもの
+ベースモデル（SDXL 実写特化）
+推奨：
+epiCRealism XL（実写の光影に強い） [comfyui-wiki.com]
+Juggernaut XL（SDXL実写系として人気1位） [aideskers.com]
+RealVisXL V2（自然な実写美形） [aideskers.com]
+
+ComfyUI
+IP-Adapter Face（ComfyUI ノード）
+※後で「同一人物の別ショット生成」に使う
+
+
+
+✅ 【STEP 1】“理想の美形キャラの最初の1枚”を作る
+SDXL Realistic モデル（上記）をロード
+プロンプト例（18歳前後の美形男性）
+extremely handsome young male, 18 years old appearance, delicate facial structure, soft skin texture, photorealistic, studio lighting, portrait, symmetrical face, sharp jawline, korean idol style, natural expression, 8k realistic
+ネガティブ例
+deformed, blurry, ai-artifacts, unrealistic skin, extra teeth, asymmetry
+
+理想の顔1枚をまず決める（種キャラ）
+
+
+
+✅ 【STEP 2】“同一人物写真”を量産する（20〜40枚）
+✅ 方法A：Seed固定＋ポーズ変化（ControlNet）
+seed を固定
+ControlNet でポーズだけ変える
+→ 顔IDはほぼ固定されたまま、多様な角度の写真が作れる
+
+
+✅ 方法B：IP-Adapter Face で別角度を生成
+Step1で決めた“理想キャラの顔”を1枚IP-Adapter Faceに入れる
+プロンプトは同じ
+ポーズや表情だけランダム変更
+→ どの角度でも“同じ人物”として出てくる
+これは IP-Adapter Face の本来の用途。
+「別ショットの同一人物を生成する」ために作られた機能。
+
+✅ 方法C：Same Face系ノード（ComfyUI）
+顔特徴の保持に全振りできる
+角度や距離を変えても“同一人物”が出続ける
+
+
+✅【ポイント】
+この方法で20〜40枚簡単に作れる。
+LoRAが安定する最低ラインは10枚、理想は20〜50枚
+
+✅ 【STEP 3】LoRA用データの整頓
+フォルダ構成：
+/lora_training/
+   /img/    ← 20〜40枚の同一人物画像
+   /reg/    ← （任意）正則化画像（一般的な人の写真）
+   caption  ← キャプション（自動生成でOK）
+
+
+✅ 【STEP 4】LoRA学習（キャラ固定）
+クラウドGPU（RunPodなど）推奨。
+学習パラメータ（美形実写LoRAに最適）
+
+unet_lr：0.0001〜0.0002
+text_encoder_lr：0.0001
+resolution：1024（SDXL標準）
+dim：32〜64
+epoch：8〜20
+LoRA weight：0.6〜0.8（生成時）
+
+✅ 重要
+LoRAには 顔のID（目・鼻・口・骨格）だけ 学習させる。
+背景や服を学習しないようにする。
+
+✅ 【STEP 5】完成したLoRAをテスト
+LoRAを読み込んで
+<lora:yourCharacter:0.7>
+角度を変えても同じ人物が生成されれば成功。
+
+
+
+＜＜写真生成＞＞
+
+【STEP 1】元の写真を用意
+撮影した写真の顔や髪・服を差し替える。
+
+✅ 【STEP 2】人物部分だけマスク（塗り）を作る
+ComfyUIの Inpaint 用マスク：
+
+顔全体（必要なら髪も）
+服を変える場合は服部分も白く塗る
+背景は黒く残す → 保持される
+→ 塗った白い部分だけ生成で置き換わる。
+
+✅ 【STEP 3】IP-Adapterで“背景と光を抽出”
+IP-Adapter Style（または Full Masked）
+元写真を入力
+顔部分は無視（mask）
+背景・光・色味だけAIに渡す
+
+結果：
+✅ あなたの写真の空気感
+✅ カメラの光の回り方
+✅ 背景の奥行き
+だけが生成結果に乗る。
+これで “AI臭のない完全実写” になる。
+
+✅ 【STEP 4】LoRA（キャラ顔）を挿す
+生成時に：
+<lora:myBeautifulMale:0.7>
+
+と挿入するだけ。
+
+顔 → LoRAキャラの顔
+髪 → LoRAキャラの質感
+服 → 塗った範囲が変更される
+背景 → 元写真のまま
+ライティング → IP-Adapterの参照通り
+
+
+✅ 【STEP 5】Inpaint生成（部分置換）
+Inpaint ノードの設定：
+
+denoise：0.55〜0.75
+inpaint mode：only masked
+masked content：original
+sampler：DPM++ SDE Karras
+step：20〜40
+
+→ “塗った部分だけ” LoRAキャラに置換される。

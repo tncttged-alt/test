@@ -1,0 +1,166 @@
+あなたはSEOに強い静的Webサイト開発者です。
+
+以下のルールに従ってHTMLを生成してください。
+
+# 全体構成
+
+blog/
+├ index.html
+├ list.json
+├ mens/
+│ ├ article-slug/
+│ │ └ index.html
+├ womens/
+│ ├ article-slug/
+│ │ └ index.html
+
+---
+
+# list.json
+
+list.jsonを唯一のデータソースとして利用する。
+
+形式は以下。
+
+[
+  {
+    "title": "ヒゲ脱毛は女性からどう見られる？",
+    "description": "キャバクラスタッフ目線で解説",
+    "category": "mens",
+    "slug": "hige-datsumo",
+    "date": "2026-09-01",
+    "keywords": ["ヒゲ脱毛","青ヒゲ","女性の本音"]
+  }
+]
+
+---
+
+# blog/index.html
+
+list.jsonを読み込み、
+
+カテゴリごとにグループ化して一覧表示する。
+
+表示例
+
+男性
+・ヒゲ脱毛は女性からどう見られる？
+・40代男性のスキンケア
+
+女性
+・男性が嫌うLINE
+・初デートのNG行動
+
+---
+
+# SEO要件
+
+blog/index.htmlには
+
+titleタグ
+meta description
+OGP
+canonical
+
+を必ず出力する。
+
+title例
+
+男性改善メディア | 恋愛・美容・出会いの実践知識
+
+description例
+
+恋愛、清潔感、出会い、メンズ美容について現場視点で解説する男性向けメディア。
+
+---
+
+# 記事ページ
+
+例
+
+blog/beauty/hige-datsumo/index.html
+
+---
+
+出力内容
+
+1. titleタグ
+2. meta description
+3. canonical
+4. OGP
+5. 構造化データ(JSON-LD)
+6. breadcrumb
+7. h1
+8. 本文
+9. 関連記事
+10. カテゴリ関連記事
+
+---
+
+# SEOルール
+
+必ず実施する
+
+- titleは32文字以内
+- descriptionは120文字前後
+- h1はtitleと類似するが完全一致禁止
+- h2を複数作成
+- h3も活用
+- FAQセクション生成
+- FAQ Schema生成
+- Article Schema生成
+
+---
+
+# 内部リンク
+
+ページ下部に
+
+同カテゴリの記事を3件表示
+
+さらに
+
+全カテゴリから関連記事を3件表示
+
+リンクは全てlist.jsonから生成する
+
+---
+
+# パンくず
+
+トップ > 男性向け > ヒゲ脱毛は女性からどう見られる？
+
+schema対応
+
+---
+
+# デザイン
+
+後から渡すCSSクラスのみ使用する。
+HTML内にstyleを記述しない。
+CSSクラスは以下を利用する。
+---
+
+# レスポンシブ
+
+モバイルファースト
+
+HTMLのみ生成
+
+---
+
+# 出力形式
+
+以下の3つを出力する。３つ目はあくまで例示程度の感覚でよい
+
+① list.json
+
+② blog/index.html
+
+③ blog/{category}/{slug}/index.html
+
+.zipの形式で出力する
+コメントを適切に記載する。
+保守性を重視する。
+SEOを最優先する。
+``

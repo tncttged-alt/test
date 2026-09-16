@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>業務用ホームページ</title>
+  <link rel="stylesheet" href="./index.css" />
+  <link rel="manifest" href="./manifest.json">
+</head>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js")
+        .then(reg => console.log("SW registered:", reg))
+        .catch(err => console.error("SW registration failed:", err));
+    });
+  }
+</script>
+
+<body>
+  <header class="tabbar" role="tablist" aria-label="ビュー切替">
+    <button class="tab is-active" role="tab" aria-selected="true" data-target="time">早朝出勤日一覧</button>
+    <button class="tab" role="tab" aria-selected="false" data-target="gallery">川向ギャラリー</button>
+    <button class="tab" role="tab" aria-selected="false" data-target="knowledge">川向ナレッジ　</button>
+  </header>
+
+  <main class="main">
+    <!-- 早朝出勤日一覧（デフォルト表示） -->
+    <section id="view-time" class="view is-active" aria-labelledby="tab-time">
+
+      <div class="muted" style="margin:.5rem 0;">
+        タップするとカレンダーに予定＋前日21:00にリマインド通知を登録します。
+      </div>
+
+      <div style="margin:.5rem 0;">
+        <button id="btn-push-register" class="btn">
+          この端末に通知を登録
+        </button>
+        <span id="push-status" class="muted"></span>
+      </div>
+
+
+      <!-- 1行ずつ改行して並べる（シンプルな縦リスト） -->
+      <ul id="time-list" class="list" aria-live="polite" aria-label="予定に登録する行一覧"
+        style="list-style:none; padding-left:0;"></ul>
+    </section>
+
+    <!-- ギャラリー -->
+    <section id="view-gallery" class="view" aria-labelledby="tab-gallery">
+      <div id="grid" class="grid" aria-live="polite"></div>
+    </section>
+
+    <!-- 勉強したこと（テキスト一覧 + 内容表示） -->
+    <section id="view-knowledge" class="view" aria-labelledby="tab-knowledge">
+      <div class="toolbar">
+        <span id="kn-count" class="muted">ファイル数: 0</span>
+      </div>
+      <div id="kn-list" class="grid" aria-live="polite"></div>
+
+      <!-- 内容表示パネル（クリック時に開く） -->
+      <div id="kn-viewer" class="kn-viewer hidden">
+        <div class="kn-viewer-bar">
+          <span id="kn-current" class="time"></span>
+          <button id="kn-close" class="btn">閉じる</button>
+        </div>
+        <pre id="kn-content" class="logbox" aria-label="テキスト内容（読み取り専用）"></pre>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    /*** 設定エリア *********************************************/
+    // supabaseの早朝対応日付テーブル
+    const PROJECT_URL = "https://dwlsymcihjjodvqfjkdf.supabase.co";
+    const API_KEY = "sb_publishable_ww6uMGGHKkjl3HVg07Rf6A_xZEo2pDd";
+    const TABLE = "testTable";
+    const VAPID_PUBLIC_KEY = "BNmXi95n2NavqNV2fYjI6-xSeQgmPVlx6jux6lCQiJjpXx5eDL6TDlDlGnCiuxGd-xJ5KNQ9vrJY6c4GcfzEIhI";
+    const headers = {
+      "apikey": API_KEY,
+      "Authorization": `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": "return=representation"
+    };
+    const elTbody = document.querySelector("#tbl tbody");
+    const elStatus = document.getElementById("status");
+    const elForm = document.getElementById("addForm");
+    const elDt = document.getElementById("dtLocal");
+    // ギャラリー（PNGなど）
+    const IMAGES = [
+      "background.png", "yatai.png", "ramain.png", "sokun.png", "nngk.png"
+    ];
+    const DOWNLOAD_BASE = "./downloads/";
+
+    const IMAGE_DOWNLOADS = {
+      "background.png": "dl.zip",
+      "yatai.png": "dl2.zip",
+      "ramain.png": "dl3.zip",
+      "sokun.png": "dl4.zip",
+      "nngk.png": "dl5.zip"
+    };
+    const GALLERY_BASE = "./gallery/";
+
+    // 勉強したこと（テキストファイルの「ファイル名だけ」を列挙）
+    const KNOWLEDGE = [
+      "わからんとこ.txt",
+      "夕飯.txt",
+      "糖尿病について.txt",
+      "SNS運用について.txt"
+      // "./knowledge/" を基準に読み込みます
+    ];
+    const KNOWLEDGE_BASE = "./knowledge/";
+    /************************************************************/
+
+    (function initTabs() {
+      const tabs = Array.from(document.querySelectorAll('.tabbar .tab'));
+      const views = {
+        time: document.getElementById('view-time'),
+        gallery: document.getElementById('view-gallery'),
+        knowledge: document.getElementById('view-knowledge'),
+      };
+
+      let galleryRendered = false;
+      let knowledgeRendered = false;
+
+      // 勉強したことの内容キャッシュ
+      const knCache = new Map();
+
+      function show(name) {
+        // 表示切替
+        Object.entries(views).forEach(([key, el]) => {
+          el.classList.toggle('is-active', key === name);
+        });
+        // タブ状態
+        tabs.forEach(btn => {
+          const active = btn.dataset.target === name;
+          btn.classList.toggle('is-active', active);
+          btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        // ハッシュ更新
+        history.replaceState(null, '', '#' + name);
+
+        // 初回・表示時処理
+        if (name === 'gallery' && !galleryRendered) {
+          renderGallery();
+          galleryRendered = true;
+        } else if (name === 'time') {
+          // 毎回、最新の log.txt を取得してリストを描画（キャッシュ制御表示は不要）
+          fetchAndRenderTime().catch(() => {
+            renderTimeFromRows(''); // エラー時は空で
+          });
+        } else if (name === 'knowledge' && !knowledgeRendered) {
+          renderKnowledge();
+          knowledgeRendered = true;
+        }
+      }
+
+      tabs.forEach(btn => {
+        btn.addEventListener('click', () => show(btn.dataset.target));
+      });
+
+      // デフォルトは #time（ログ）
+      const h = (location.hash || '#time').replace('#', '');
+      show(['gallery', 'knowledge'].includes(h) ? h : 'time');
+
+      /* ---------- ギャラリー ---------- */
+function renderGallery() {
+  const grid = document.getElementById('grid');
+
+  if (!IMAGES.length) {
+    grid.innerHTML = '<p class="muted">画像が登録されていません（IMAGES 配列に追加してください）。</p>';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+
+  IMAGES.forEach(src => {
+    const imagePath = resolvePathImage(src);
+    const imageName = src.split('/').pop();
+
+    const zipName = IMAGE_DOWNLOADS[imageName];
+
+    const fig = document.createElement('figure');
+    fig.className = 'card';
+
+    const frame = document.createElement('div');
+    frame.className = 'frame';
+
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = imagePath;
+    img.alt = imageName;
+
+    img.onerror = () => {
+      img.alt = '(読み込み失敗) ' + imageName;
+    };
+
+    if (zipName) {
+      const link = document.createElement('a');
+      link.href = DOWNLOAD_BASE + zipName;
+      link.download = zipName;
+      link.title = zipName + ' をダウンロード';
+
+      link.appendChild(img);
+      frame.appendChild(link);
+    } else {
+      frame.appendChild(img);
+    }
+
+    fig.appendChild(frame);
+
+    const cap = document.createElement('figcaption');
+    cap.className = 'caption';
+
+    if (zipName) {
+      cap.textContent = imageName + ' / クリックで ' + zipName + ' をダウンロード';
+    } else {
+      cap.textContent = imageName + ' / ZIP未設定';
+    }
+
+    fig.appendChild(cap);
+    frag.appendChild(fig);
+  });
+
+  grid.innerHTML = '';
+  grid.appendChild(frag);
+}
+
+      /* ---------- 早朝出勤日：log.txt を取得してリストを作成 ---------- */
+
+      // Base64URL → Uint8Array（PushManager.subscribe 用）
+      function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(base64); const out = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
+        return out;
+      }
+
+      async function registerDeviceForPush() {
+        const $status = document.getElementById('push-status');
+        $status.textContent = '処理中…';
+
+        try {
+          // 1) SW 登録（済みなら既存登録を返す）
+          const reg = await navigator.serviceWorker.register('./sw.js');
+          await navigator.serviceWorker.ready; // ready 待ちが確実
+          // 2) 通知許可
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { $status.textContent = '許可が必要です'; return; }
+
+          // 3) Push に購読（VAPID 公開鍵を指定）
+          const subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+          }); // → PushSubscription を取得（endpoint / keys）[1](https://developer.mozilla.org/en-US/docs/Web/API/PushManager/subscribe)
+
+          // 4) Supabase に保存（既存エンドポイントがあれば upsert でもOK）
+          const sub = subscription.toJSON(); // { endpoint, expirationTime, keys:{p256dh,auth} }[2](https://developer.mozilla.org/en-US/docs/Web/API/PushSubscription)
+          const body = JSON.stringify({
+            endpoint: sub.endpoint,
+            p256dh: sub.keys.p256dh,
+            auth: sub.keys.auth
+          });
+
+          // push_subscriptions に POST
+          const url = `${PROJECT_URL}/rest/v1/push_subscriptions`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              apikey: API_KEY,
+              Authorization: `Bearer ${API_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=representation'
+            },
+            body
+          });
+          const text = await res.text();
+          if (!res.ok) throw new Error(`REST ${res.status}: ${text}`);
+
+          $status.textContent = '登録しました';
+        } catch (e) {
+          console.error(e);
+          document.getElementById('push-status').textContent = 'エラー: ' + (e?.message || e);
+        }
+      }
+
+      // ボタンにイベント接続（ユーザージェスチャー起点が推奨）
+      document.getElementById('btn-push-register')?.addEventListener('click', async () => {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+          alert('このブラウザはプッシュ通知に未対応です'); return;
+        }
+        await registerDeviceForPush();
+      });
+
+      async function fetchAndRenderTime() {
+        // 取得したい列だけ指定し、並び順を制御（必要なら where 句相当も追加可）
+        const url = `${PROJECT_URL}/rest/v1/${TABLE}`
+          + `?select=id,scheduled&order=scheduled.asc`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()));
+        const rows = await res.json();      // [{ id, scheduled, created_at }, ...]
+        renderTimeFromRows(rows);
+      }
+
+
+      /* ---------- .ics 生成ユーティリティ ---------- */
+      // 例: "2026/02/10(火) 8:39:00"（曜日は無視）
+      function parseJpDateLine(line) {
+        const m = line.trim().match(
+          /^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\(.+?\))?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/
+        );
+        if (!m) return null;
+        const [_, yy, mm, dd, HH, MM, SS] = m;
+        return new Date(
+          Number(yy),
+          Number(mm) - 1,
+          Number(dd),
+          Number(HH),
+          Number(MM),
+          SS ? Number(SS) : 0,
+          0
+        );
+      }
+      function pad2(n) { return String(n).padStart(2, '0'); }
+      function formatUtcForICS(d) {
+        const y = d.getUTCFullYear();
+        const m = pad2(d.getUTCMonth() + 1);
+        const day = pad2(d.getUTCDate());
+        const hh = pad2(d.getUTCHours());
+        const mm = pad2(d.getUTCMinutes());
+        const ss = pad2(d.getUTCSeconds());
+        return `${y}${m}${day}T${hh}${mm}${ss}Z`;
+      }
+      function buildICS(title, startLocal, endLocal) {
+        // 前日 21:00（ローカル）を絶対UTCにして VALARM(TRIGGER) を仕込む
+        const alarmLocal = new Date(startLocal.getTime());
+        alarmLocal.setDate(alarmLocal.getDate() - 1);
+        alarmLocal.setHours(21, 0, 0, 0);
+
+        const now = new Date();
+        const uid = `${startLocal.getTime()}-${Math.random().toString(36).slice(2)}@fast-spa`;
+
+        const lines = [
+          'BEGIN:VCALENDAR',
+          'VERSION:2.0',
+          'PRODID:-//rin//fast-spa//JP',
+          'CALSCALE:GREGORIAN',
+          'METHOD:PUBLISH',
+          'BEGIN:VEVENT',
+          `UID:${uid}`,
+          `DTSTAMP:${formatUtcForICS(now)}`,
+          `SUMMARY:${title}`,
+          `DTSTART:${formatUtcForICS(startLocal)}`,
+          `DTEND:${formatUtcForICS(endLocal)}`,
+          'DESCRIPTION:早朝出勤日前日にリマインド通知',
+          'BEGIN:VALARM',
+          'ACTION:DISPLAY',
+          'DESCRIPTION:前日21:00 リマインド',
+          `TRIGGER;VALUE=DATE-TIME:${formatUtcForICS(alarmLocal)}`,
+          'END:VALARM',
+          'END:VEVENT',
+          'END:VCALENDAR'
+        ];
+        return lines.join('\r\n');
+      }
+      function downloadICSFile(fileName, icsText) {
+        const blob = new Blob([icsText], { type: 'text/calendar;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        // a要素でダウンロード/オープン（iOS/Android両対応狙い）
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName; // 多くの環境で「カレンダーで開く」に誘導される
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // URLは少し遅延して破棄（モバイル互換配慮）
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }
+
+      /* ---------- 各行（タップ）→ .ics 生成（縦並び・1行ずつ改行） ---------- */
+
+      function renderTimeFromRows(rows) {
+        const ul = document.getElementById('time-list');
+        if (!ul) return;
+        ul.innerHTML = '';
+
+        if (!rows || !rows.length) {
+          ul.innerHTML = '<li class="muted">Supabase に予定がありません。</li>';
+          return;
+        }
+
+        for (const r of rows) {
+          // r.scheduled は ISO 文字列（timestamptz）。Date に変換して扱う
+          const start = new Date(r.scheduled);
+          if (isNaN(+start)) continue;
+          const end = new Date(start.getTime() + 60 * 60 * 1000); // デフォルト1時間
+
+          // 表示行に出す “見やすい日本語表記”
+          const line = formatJpLine(start); // 例: 2026/03/15(日) 09:30:00
+
+          const li = document.createElement('li');
+          li.style.margin = '0.25rem 0';
+
+          const a = document.createElement('a');
+          a.href = '#';
+          a.className = 'row-link';
+          a.setAttribute('role', 'button');
+          a.setAttribute('aria-label', `${line} をカレンダー登録（.ics生成）`);
+          a.style.display = 'inline-block';
+          a.style.padding = '0.5rem 0.75rem';
+          a.style.textDecoration = 'none';
+          a.style.border = '1px solid var(--border, #ddd)';
+          a.style.borderRadius = '6px';
+          a.style.background = 'var(--bg, #fff)';
+          a.style.color = 'inherit';
+          a.textContent = line;
+
+          a.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            const ics = buildICS('早朝出勤', start, end);
+            const fname = `${start.getFullYear()}${pad2(start.getMonth() + 1)}${pad2(start.getDate())}_`
+              + `${pad2(start.getHours())}${pad2(start.getMinutes())}.ics`;
+            downloadICSFile(fname, ics);
+          });
+
+          li.appendChild(a);
+          ul.appendChild(li);
+        }
+      }
+
+
+      /* ---------- 勉強したこと ---------- */
+      function renderKnowledge() {
+        const listEl = document.getElementById('kn-list');
+        const countEl = document.getElementById('kn-count');
+
+        if (!KNOWLEDGE.length) {
+          listEl.innerHTML = '<p class="muted">テキストが登録されていません（KNOWLEDGE 配列に追加してください）。</p>';
+          countEl.textContent = 'ファイル数: 0';
+          return;
+        }
+
+        const frag = document.createDocumentFragment();
+        KNOWLEDGE.forEach(name => {
+          const fig = document.createElement('figure'); fig.className = 'card';
+          const btn = document.createElement('button');
+          btn.className = 'btn kn-item';
+          btn.type = 'button';
+          btn.textContent = name;         // テキスト名のみ表示
+          btn.addEventListener('click', () => openKnowledge(name));
+          fig.appendChild(btn);
+          frag.appendChild(fig);
+        });
+        listEl.appendChild(frag);
+        countEl.textContent = 'ファイル数: ' + KNOWLEDGE.length;
+
+        // 閉じるボタン
+        document.getElementById('kn-close').addEventListener('click', () => {
+          document.getElementById('kn-viewer').classList.add('hidden');
+        });
+      }
+
+      async function openKnowledge(name) {
+        const viewer = document.getElementById('kn-viewer');
+        const label = document.getElementById('kn-current');
+        const pre = document.getElementById('kn-content');
+
+        label.textContent = name;
+
+        try {
+          // キャッシュがあればそれを表示、なければ取得
+          let text = knCache.get(name);
+          if (!text) {
+            const res = await fetch(resolvePathText(name), { cache: 'reload' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            text = await res.text();
+            knCache.set(name, text);
+          }
+          pre.textContent = text;
+          viewer.classList.remove('hidden');
+          // スクロール位置を内容パネルに寄せる（モバイル配慮）
+          viewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (e) {
+          pre.textContent = '読み込みエラー: ' + (e?.message || e);
+          viewer.classList.remove('hidden');
+        }
+      }
+
+      /* ---------- “YYYY/MM/DD(曜) HH:mm:ss” で見やすく表示 ---------- */
+      function formatJpLine(d) {
+        const w = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+        return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}(${w}) `
+          + `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+      }
+
+      /* ---------- パス解決 ---------- */
+      function resolvePathImage(p) {
+        if (/^https?:\/\//i.test(p)) return p;
+        if (p.startsWith('./') || p.startsWith('../') || p.startsWith('/')) return p;
+        return GALLERY_BASE + p;
+      }
+      function resolvePathText(p) {
+        if (/^https?:\/\//i.test(p)) return p;
+        if (p.startsWith('./') || p.startsWith('../') || p.startsWith('/')) return p;
+        return KNOWLEDGE_BASE + p;
+      }
+    })();
+  </script>
+</body>
+
+</html>
+
